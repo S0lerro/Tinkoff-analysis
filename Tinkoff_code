@@ -1,0 +1,175 @@
+import tkinter
+
+from bs4 import BeautifulSoup
+import pandas as pd, random, requests, openpyxl, webbrowser
+from nltk.corpus import stopwords
+from tkinter import *
+from tkinter import ttk
+from tkinter import messagebox
+from nltk.tokenize import word_tokenize, sent_tokenize
+from matplotlib import pyplot as plt
+import seaborn as sns
+from nltk.sentiment.vader import SentimentIntensityAnalyzer
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import shutil
+from screenshotone import Client, TakeOptions
+from PIL import ImageTk, Image
+
+
+# ======================================================================================================================
+urlstocks = 'https://www.tbank.ru/invest/stocks/'
+stocklist = []
+page1 = requests.get(urlstocks)
+encoding1 = page1.encoding if 'charset' in page1.headers.get('content-type', '').lower() else None
+soup1 = BeautifulSoup(page1.content, 'lxml', from_encoding=encoding1)
+stocks = soup1.find_all("div", class_="SecurityRow__text_h1nrb w-full")
+if stocks is not None:
+    for stock in stocks:
+        formated_name = stock.find("div", class_="SecurityRow__ticker_KMm7A").get_text()
+        stocklist.append(formated_name)
+
+# ======================================================================================================================
+
+root = Tk()
+root.iconbitmap(default="favicon.ico")
+root.title("Analysis")
+root.geometry("1150x800")
+combobox = ttk.Combobox(values=stocklist)
+btn_showlist = Label(text="Choose stock for analysis", font = "Serif 12")
+btn_showlist.grid(column=0, row=0, padx=20)
+combobox.grid(column=0, row=1, pady=10, padx=20)
+def checkcombo():
+    while combobox.get() == "":
+        messagebox.showinfo("Nothing selected", "Please, select a stock")
+        break
+    url = f"https://www.tbank.ru/invest/stocks/{combobox.get()}/pulse/"
+    lbl_startanalysis = Label(text=url, font = "Serif 12", fg="Blue", cursor="hand2")
+    user_agents = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/56.0.2924.87 Safari/537.36 OPR/43.0.2442.991"
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13_2) AppleWebKit/604.4.7 (KHTML, like Gecko) Version/11.0.2 Safari/604.4.7"
+    ]
+    def open_link():
+        webbrowser.open_new(url)
+    lbl_startanalysis.bind("<Button-1>", lambda e: open_link())
+
+    user_agent = random.choice(user_agents)
+    headers = {"User-Agent": user_agent}
+
+    page = requests.get(url, headers=headers)
+    encoding = page.encoding if 'charset' in page.headers.get('content-type', '').lower() else None
+    soup = BeautifulSoup(page.content, 'lxml', from_encoding=encoding)
+    scrapped_data = []
+
+    posts = soup.find_all("div", class_="pulse-posts-by-ticker__dXTx8X")
+    if posts is not None:
+        for post in posts:
+            data = {
+                "author": post.find("span", class_="pulse-posts-by-ticker__aSULlZ").get_text(),
+                "text": post.find("div",
+                                  class_="pulse-posts-by-ticker__ffTK6Z pulse-posts-by-ticker__ifTK6Z").get_text(),
+                "time": post.find("div", class_="pulse-posts-by-ticker__cSULlZ").get_text()
+            }
+            scrapped_data.append(data)
+
+    # ======================================================================================================================
+
+    df = pd.DataFrame.from_dict(data=scrapped_data)
+    df.index += 1
+    df.to_excel("scrapping.xlsx", sheet_name='Tbank')
+
+    
+    # ======================================================================================================================
+
+    lbl_startanalysis.grid(column=1, row=0, padx=60)
+
+    wb = openpyxl.load_workbook("scrapping.xlsx")
+    sheet = wb["Tbank"]
+    full_data = ""
+    for row in range(2, 10):
+        cell_name = "{} {}".format("C", row)
+        formated_cell_name = cell_name.replace(" ", "")
+        text = sheet[formated_cell_name].value
+        full_data += text + "\n"
+    words = word_tokenize(full_data)
+    stop_words = set(stopwords.words("russian"))
+    freqTable = dict()
+    for word in words:
+        word = word.lower()
+        if word in stop_words:
+            continue
+        if word in freqTable:
+            freqTable[word] += 1
+        else:
+            freqTable[word] = 1
+
+    sentences = sent_tokenize(full_data)
+    sentence_value = dict()
+    for sentence in sentences:
+        for word, freq in freqTable.items():
+            if word in sentence.lower():
+                if sentence in sentence_value:
+                    sentence_value[sentence] += freq
+                else:
+                    sentence_value[sentence] = freq
+
+    sumValues = 0
+    for sentence in sentence_value:
+        sumValues += sentence_value[sentence]
+    summary = ""
+    average = int(sumValues / len(sentence_value))
+    for sentence in sentences:
+        if (sentence in sentence_value) and (sentence_value[sentence] > (1.2 * average)):
+            summary += " " + sentence
+    print(summary)
+    f = open("summary.txt", "w", encoding="utf-8")
+    f.write(summary)
+    f.close()
+    sid = SentimentIntensityAnalyzer()
+    sentiment_scores = sid.polarity_scores(summary)
+    if sentiment_scores.get("neg") > sentiment_scores.get("pos"):
+        worthing_text = "NOT WORTH"
+    elif sentiment_scores.get("neg") < sentiment_scores.get("pos"):
+        worthing_text = "WORTH"
+    elif sentiment_scores.get("neg") or sentiment_scores.get("pos") < sentiment_scores.get("neu"):
+        worthing_text = "NEUTRAL"
+    pos_ratio = str(sentiment_scores.get("pos"))
+    neg_ratio = str(sentiment_scores.get("neg"))
+    neu_ratio = str(sentiment_scores.get("neu"))
+    stock_mood_text = "Positive ratio: " + pos_ratio + "\n Negative ratio: " + neg_ratio + "\n Neutral ratio: " + neu_ratio
+    stock_mood = Label(text = stock_mood_text, font="Serif 14")
+    worthing = Label(text="Result is: " + worthing_text, font = "Serif 12")
+    def open_analysis():
+        webbrowser.open("summary.txt")
+    def plot_sentiment_scores(sentiment_scores):
+        plt.figure(figsize = (4.5,2.5))
+        sns.barplot(x=list(sentiment_scores.keys()), y=list(sentiment_scores.values()))
+        plt.title("Sentiment scores")
+        plt.ylabel("Score")
+        canvas = FigureCanvasTkAgg(plt.gcf(), master=root)
+        canvas.draw()
+        canvas.get_tk_widget().grid(column = 0, row = 5, padx=40, pady = 50)
+    plot_sentiment_scores(sentiment_scores)
+    client = Client("n6WcsZlnYleQQA", "4qQCce7oW-TMUw")
+    options = (TakeOptions.url(f"https://ru.tradingview.com/symbols/RUS-{combobox.get()}/").format("png").viewport_width(1920).viewport_height(1200).block_cookie_banners(True).block_chats(True))
+    image = client.take(options)
+    with open("screen_plot.png", "wb") as result_file:
+        shutil.copyfileobj(image, result_file)
+    frame = Frame(root, width = 300, height = 300, bg = "white")
+    frame.grid(column = 1, row = 5)
+    image = Image.open("screen_plot.png")
+    image = image.resize((250, 250), Image.Resampling.LANCZOS)
+    photo_image = ImageTk.PhotoImage(image)
+    image_label = Label(frame, image = photo_image)
+    image_label.grid(column = 1, row = 5)
+
+    check_analysis = ttk.Button(text="Check analysis", command=open_analysis, width=20)
+    worthing.grid(column=1, row=4, padx=10, pady=10)
+    stock_mood.grid(column=1, row=2, padx=10)
+    check_analysis.grid(column=0, row=4, padx=10)
+
+
+btn_startanalysis = ttk.Button(text="Start analysis", command=checkcombo, width=20)
+btn_startanalysis.grid(column=0, row=2, pady=8, padx=20)
+
+root.mainloop()
